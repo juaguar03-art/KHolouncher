@@ -153,7 +153,6 @@ class MainActivity : Activity() {
     private val homeLabels get() = prefs.getBoolean("home_labels", true)
     private val autoKeyboard get() = prefs.getBoolean("auto_kb", false)
     private val haptics get() = prefs.getBoolean("haptics", true)
-    private val doubleTapLock get() = prefs.getBoolean("dt_lock", false)
 
     private val pkgReceiver = object : BroadcastReceiver() {
         // Algunos teléfonos mandan muchos avisos seguidos: se agrupan en una sola recarga
@@ -265,13 +264,6 @@ class MainActivity : Activity() {
                 if (!isOnEmptyHome(e.rawX, e.rawY)) return
                 buzz(window.decorView)
                 launcherMenu()
-            }
-
-            override fun onDoubleTap(e: MotionEvent): Boolean {
-                if (!doubleTapLock || drawer.visibility == View.VISIBLE) return false
-                if (!isOnEmptyHome(e.rawX, e.rawY)) return false
-                lockScreen()
-                return true
             }
         })
 
@@ -1414,15 +1406,14 @@ class MainActivity : Activity() {
     }
 
     private fun settingsDialog() {
-        val keys = arrayOf("clock", "home_labels", "auto_kb", "haptics", "dt_lock")
+        val keys = arrayOf("clock", "home_labels", "auto_kb", "haptics")
         val labels = arrayOf("Mostrar reloj", "Nombres en el escritorio",
-            "Abrir teclado en el cajón", "Vibrar al mantener presionado", "Doble toque para bloquear")
-        val checked = booleanArrayOf(showClock, homeLabels, autoKeyboard, haptics, doubleTapLock)
+            "Abrir teclado en el cajón", "Vibrar al mantener presionado")
+        val checked = booleanArrayOf(showClock, homeLabels, autoKeyboard, haptics)
         AlertDialog.Builder(this).setTitle("Ajustes del launcher")
             .setMultiChoiceItems(labels, checked) { _, i, v ->
                 prefs.edit().putBoolean(keys[i], v).apply()
                 applySettings()
-                if (keys[i] == "dt_lock" && v && LockService.instance == null) lockHelp()
             }
             .setNeutralButton("Columnas: $columns") { _, _ -> columnsDialog() }
             .setPositiveButton("Listo", null)
@@ -1553,25 +1544,6 @@ class MainActivity : Activity() {
         try {
             startActivityForResult(Intent(Intent.ACTION_GET_CONTENT).setType("image/*"), REQ_ICON)
         } catch (_: Exception) { toast("No hay galería disponible") }
-    }
-
-    // ================= Bloqueo con doble toque =================
-    private fun lockScreen() {
-        if (Build.VERSION.SDK_INT < 28) { toast("Tu versión de Android no permite bloquear así"); return }
-        if (!LockService.lock()) lockHelp()
-    }
-
-    private fun lockHelp() {
-        AlertDialog.Builder(this).setTitle("Doble toque para bloquear")
-            .setMessage("Para que funcione, activá \"Mi Launcher\" en Ajustes → Accesibilidad.\n\n" +
-                "Si Android dice que es un ajuste restringido: Info de la app → menú ⋮ → " +
-                "Permitir ajustes restringidos, y volvé a intentarlo.")
-            .setPositiveButton("Abrir Accesibilidad") { _, _ -> safeStart(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
-            .setNeutralButton("Info de la app") { _, _ ->
-                safeStart(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
-            }
-            .setNegativeButton("Cancelar", null)
-            .show()
     }
 
     // ================= Fondo de pantalla =================

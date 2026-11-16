@@ -7,7 +7,6 @@ Android launcher retro, estilo Holo / ICS.
 - **Carpetas**: soltá una app encima de otra.
 - **Widgets**: pestaña **WIDGETS** en el cajón. Mantener presionado un widget → cambiar tamaño o quitar.
 - **Deslizar arriba**: cajón de apps. **Deslizar abajo**: notificaciones.
-- **Doble toque** en un espacio vacío: bloquear pantalla (se activa en Ajustes del launcher).
 - **Mantener presionado un espacio vacío**: fondo de pantalla, widgets, ajustes, ocultar apps, copia de seguridad.
 
 ## Cajón
