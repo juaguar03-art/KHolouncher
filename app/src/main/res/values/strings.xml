@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="lock_service_desc">Permite que Mi Launcher bloquee la pantalla cuando das doble toque en un espacio vacío del escritorio. No lee ni guarda nada de la pantalla.</string>
+</resources>
