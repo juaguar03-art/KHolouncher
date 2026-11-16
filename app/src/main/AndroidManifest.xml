@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+    <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
+    <uses-permission android:name="android.permission.SET_WALLPAPER" />
+    <uses-permission android:name="android.permission.SET_WALLPAPER_HINTS" />
 
     <queries>
         <intent>
@@ -12,6 +15,7 @@
 
     <application
         android:label="Mi Launcher"
+        android:icon="@drawable/ic_launcher"
         android:theme="@android:style/Theme.Holo.Wallpaper.NoTitleBar">
         <activity
             android:name=".MainActivity"
@@ -19,6 +23,7 @@
             android:launchMode="singleTask"
             android:clearTaskOnLaunch="true"
             android:excludeFromRecents="true"
+            android:windowSoftInputMode="adjustResize|stateHidden"
             android:configChanges="orientation|screenSize|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -26,5 +31,32 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <!-- Entrada en el cajón de otros launchers (p. ej. el de Poco): abre los ajustes -->
+        <activity-alias
+            android:name=".LauncherEntry"
+            android:targetActivity=".MainActivity"
+            android:label="Mi Launcher"
+            android:icon="@drawable/ic_launcher"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- Doble toque para bloquear la pantalla -->
+        <service
+            android:name=".LockService"
+            android:exported="true"
+            android:label="Mi Launcher: doble toque para bloquear"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/lock_service" />
+        </service>
     </application>
 </manifest>
