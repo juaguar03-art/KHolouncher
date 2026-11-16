@@ -657,24 +657,20 @@ class MainActivity : Activity() {
     }
 
     private inner class Tab(label: String, onClick: () -> Unit) {
-        val tv = TextView(this@MainActivity).apply {
+        // La raya azul se dibuja dentro del propio texto: así la pestaña mide solo lo que ocupa su nombre
+        val box = TabView(this@MainActivity).apply {
             text = label
             setTextColor(Color.WHITE)
             textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
-            setPadding(dp(16), dp(14), dp(16), dp(10))
-        }
-        val line = View(this@MainActivity)
-        val box = LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(tv)
-            addView(line, LinearLayout.LayoutParams(MATCH, dp(4)))
+            maxLines = 1
+            setPadding(dp(16), dp(14), dp(16), dp(14))
             setOnClickListener { onClick() }
         }
 
         fun select(on: Boolean) {
-            tv.alpha = if (on) 1f else 0.55f
-            line.setBackgroundColor(if (on) HOLO_BLUE else Color.TRANSPARENT)
+            box.alpha = if (on) 1f else 0.55f
+            box.lineColor = if (on) HOLO_BLUE else Color.TRANSPARENT
         }
     }
 

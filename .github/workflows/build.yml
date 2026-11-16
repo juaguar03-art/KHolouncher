@@ -43,12 +43,13 @@ jobs:
           name: MiLauncher
           path: MiLauncher-*.apk
 
-      # En main: publica el APK directo (sin zip) en Releases
+      # Publica el APK directo (sin zip) en Releases con cada cambio
       - name: Publicar en Releases
-        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.VER }}-${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
           name: Mi Launcher ${{ env.VER }} (build ${{ github.run_number }})
           files: MiLauncher-*.apk
-          make_latest: true
+          prerelease: ${{ github.ref != 'refs/heads/main' }}
+          make_latest: ${{ github.ref == 'refs/heads/main' }}

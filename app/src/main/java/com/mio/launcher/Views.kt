@@ -294,3 +294,17 @@ class AllAppsButton(c: Context) : View(c) {
         for (i in -1..1) for (j in -1..1) cv.drawCircle(cx + i * gap, cy + j * gap, dot, p)
     }
 }
+
+// ---------- Pestaña estilo Holo: texto con raya azul de 4dp abajo ----------
+class TabView(c: Context) : android.widget.TextView(c) {
+    var lineColor = Color.TRANSPARENT
+        set(v) { field = v; invalidate() }
+    private val p = Paint()
+
+    override fun onDraw(cv: Canvas) {
+        super.onDraw(cv)
+        p.color = lineColor
+        val h = 4 * resources.displayMetrics.density
+        cv.drawRect(0f, height - h, width.toFloat(), height.toFloat(), p)
+    }
+}
