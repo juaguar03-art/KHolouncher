@@ -9,12 +9,20 @@ import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.AlarmClock
 import android.provider.Settings
+import android.text.Editable
+import android.text.InputType
 import android.text.TextUtils
+import android.text.TextWatcher
 import android.util.TypedValue
 import android.view.*
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.*
 import java.io.File
+import java.text.Normalizer
+import kotlin.math.abs
 
 val HOLO_BLUE = 0xFF33B5E5.toInt()
 const val REQ_ICON = 42
@@ -31,41 +39,62 @@ class App(
 
 class MainActivity : Activity() {
     private lateinit var prefs: SharedPreferences
-    private val apps = mutableListOf<App>()
+    private val apps = mutableListOf<App>()          // todas las apps
+    private val drawerApps = mutableListOf<App>()    // visibles en el cajón (sin ocultas, filtradas)
     private val byKey = HashMap<String, App>()
     private val home = mutableListOf<String>()
     private val homeApps = mutableListOf<App>()
+    private val hidden = HashSet<String>()
     private val dock = arrayOfNulls<String>(4)
     private val dockViews = arrayOfNulls<ImageView>(4)
     private lateinit var drawer: LinearLayout
+    private lateinit var drawerGrid: GridView
+    private lateinit var homeGrid: GridView
+    private lateinit var dockBar: LinearLayout
+    private lateinit var clockBox: LinearLayout
+    private lateinit var search: EditText
     private lateinit var drawerAdapter: AppAdapter
     private lateinit var homeAdapter: AppAdapter
+    private lateinit var gestures: GestureDetector
     private var pendingIconKey: String? = null
+
+    // ---------- Ajustes ----------
+    private val columns get() = prefs.getInt("cols", 4)
+    private val showClock get() = prefs.getBoolean("clock", false)
+    private val homeLabels get() = prefs.getBoolean("home_labels", true)
+    private val autoKeyboard get() = prefs.getBoolean("auto_kb", false)
+    private val haptics get() = prefs.getBoolean("haptics", true)
 
     private val pkgReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) = loadApps()
     }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+    private val imm get() = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
         prefs = getSharedPreferences("launcher", MODE_PRIVATE)
         pendingIconKey = b?.getString("pending")
 
-        drawerAdapter = AppAdapter { apps }
-        homeAdapter = AppAdapter { homeApps }
+        drawerAdapter = AppAdapter(false) { drawerApps }
+        homeAdapter = AppAdapter(true) { homeApps }
 
-        val root = FrameLayout(this)
+        val root = FrameLayout(this).apply { isFocusableInTouchMode = true }
 
         // ---------- Escritorio ----------
         val homeLayout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        homeLayout.addView(makeGrid(homeAdapter), LinearLayout.LayoutParams(MATCH, 0, 1f))
+
+        clockBox = makeClock()
+        homeLayout.addView(clockBox, LinearLayout.LayoutParams(MATCH, WRAP))
+
+        homeGrid = makeGrid(homeAdapter)
+        homeLayout.addView(homeGrid, LinearLayout.LayoutParams(MATCH, 0, 1f))
         homeLayout.addView(View(this).apply { setBackgroundColor(Color.argb(60, 255, 255, 255)) },
             LinearLayout.LayoutParams(MATCH, 1).apply { setMargins(dp(16), 0, dp(16), 0) })
 
         // ---------- Dock ----------
-        val dockBar = LinearLayout(this).apply {
+        dockBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(8), dp(4), dp(8), dp(12))
@@ -86,8 +115,10 @@ class MainActivity : Activity() {
                     setPadding(dp(8), dp(8), dp(8), dp(8))
                     setBackgroundResource(tv.resourceId)
                     setOnClickListener { dock[slot]?.let { byKey[it] }?.let { launch(it) } }
-                    setOnLongClickListener {
-                        dock[slot]?.let { byKey[it] }?.let { appMenu(it, slot) }; true
+                    setOnLongClickListener { v ->
+                        val app = dock[slot]?.let { byKey[it] }
+                        if (app != null) { buzz(v); appMenu(app, slot) }
+                        app != null
                     }
                 }
                 dockViews[slot] = iv
@@ -117,13 +148,64 @@ class MainActivity : Activity() {
         drawer.addView(tab, LinearLayout.LayoutParams(WRAP, WRAP))
         drawer.addView(View(this).apply { setBackgroundColor(HOLO_BLUE); alpha = 0.5f },
             LinearLayout.LayoutParams(MATCH, dp(1)))
-        drawer.addView(makeGrid(drawerAdapter).apply {
+
+        search = EditText(this).apply {
+            hint = "Buscar aplicaciones"
+            setSingleLine()
+            textSize = 16f
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.argb(110, 255, 255, 255))
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            imeOptions = EditorInfo.IME_ACTION_GO
+            setCompoundDrawablesWithIntrinsicBounds(android.R.drawable.ic_menu_search, 0, 0, 0)
+            compoundDrawablePadding = dp(6)
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun afterTextChanged(s: Editable?) = filterDrawer()
+            })
+            setOnEditorActionListener { _, action, _ ->
+                if (action == EditorInfo.IME_ACTION_GO) {
+                    drawerApps.firstOrNull()?.let { launch(it) }; true
+                } else false
+            }
+        }
+        drawer.addView(search, LinearLayout.LayoutParams(MATCH, WRAP).apply {
+            setMargins(dp(12), dp(8), dp(12), 0)
+        })
+
+        drawerGrid = makeGrid(drawerAdapter).apply {
             isFastScrollEnabled = true
             setPadding(dp(4), dp(8), dp(4), dp(8))
-        }, LinearLayout.LayoutParams(MATCH, 0, 1f))
+        }
+        drawer.addView(drawerGrid, LinearLayout.LayoutParams(MATCH, 0, 1f))
         root.addView(drawer, FrameLayout.LayoutParams(MATCH, MATCH))
 
         setContentView(root)
+        root.requestFocus()
+
+        // ---------- Gestos ----------
+        gestures = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
+                if (e1 == null) return false
+                val dy = e2.y - e1.y
+                val dx = e2.x - e1.x
+                if (abs(dy) < dp(80) || abs(dy) < abs(dx) * 1.5f || abs(vy) < 800) return false
+                if (drawer.visibility == View.VISIBLE) {
+                    if (dy > 0 && !drawerGrid.canScrollVertically(-1)) { closeDrawer(); return true }
+                    return false
+                }
+                if (dy < 0) openDrawer() else expandNotifications()
+                return true
+            }
+
+            override fun onLongPress(e: MotionEvent) {
+                if (drawer.visibility == View.VISIBLE) return
+                if (!isOnEmptyHome(e.rawX, e.rawY)) return
+                buzz(window.decorView)
+                launcherMenu()
+            }
+        })
 
         val f = IntentFilter().apply {
             addAction(Intent.ACTION_PACKAGE_ADDED)
@@ -134,7 +216,13 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(pkgReceiver, f, RECEIVER_EXPORTED)
         else registerReceiver(pkgReceiver, f)
 
+        applySettings()
         loadApps()
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (::gestures.isInitialized) gestures.onTouchEvent(ev)
+        return super.dispatchTouchEvent(ev)
     }
 
     override fun onDestroy() {
@@ -169,6 +257,8 @@ class MainActivity : Activity() {
         apps.sortBy { it.label.lowercase() }
         home.clear()
         prefs.getString("home", "")!!.split(";").filter { it.isNotEmpty() }.forEach { home.add(it) }
+        hidden.clear()
+        hidden.addAll(prefs.getStringSet("hidden", emptySet())!!)
         for (i in 0..3) dock[i] = prefs.getString("dock_$i", null)
         refresh()
     }
@@ -177,18 +267,39 @@ class MainActivity : Activity() {
         homeApps.clear()
         home.mapNotNullTo(homeApps) { byKey[it] }
         homeAdapter.notifyDataSetChanged()
-        drawerAdapter.notifyDataSetChanged()
+        filterDrawer()
         for (i in 0..3) dockViews[i]?.setImageDrawable(dock[i]?.let { byKey[it] }?.icon)
+    }
+
+    private fun norm(s: String) =
+        Normalizer.normalize(s, Normalizer.Form.NFD).replace(Regex("\\p{M}+"), "").lowercase()
+
+    private fun filterDrawer() {
+        val q = if (::search.isInitialized) norm(search.text.toString().trim()) else ""
+        drawerApps.clear()
+        apps.filterTo(drawerApps) { it.key !in hidden && (q.isEmpty() || norm(it.label).contains(q)) }
+        drawerAdapter.notifyDataSetChanged()
     }
 
     private fun save() {
         val e = prefs.edit().putString("home", home.joinToString(";"))
         for (i in 0..3) e.putString("dock_$i", dock[i])
+        e.putStringSet("hidden", HashSet(hidden))
         e.apply()
     }
 
+    private fun applySettings() {
+        homeGrid.numColumns = columns
+        drawerGrid.numColumns = columns
+        clockBox.visibility = if (showClock) View.VISIBLE else View.GONE
+        homeGrid.isHapticFeedbackEnabled = haptics
+        drawerGrid.isHapticFeedbackEnabled = haptics
+        homeAdapter.notifyDataSetChanged()
+        drawerAdapter.notifyDataSetChanged()
+    }
+
     // ---------- Interfaz ----------
-    inner class AppAdapter(private val source: () -> List<App>) : BaseAdapter() {
+    inner class AppAdapter(private val isHome: Boolean, private val source: () -> List<App>) : BaseAdapter() {
         override fun getCount() = source().size
         override fun getItem(p: Int): App = source()[p]
         override fun getItemId(p: Int) = p.toLong()
@@ -196,7 +307,10 @@ class MainActivity : Activity() {
             val cell = (convert as? LinearLayout) ?: makeCell()
             val app = getItem(p)
             (cell.getChildAt(0) as ImageView).setImageDrawable(app.icon)
-            (cell.getChildAt(1) as TextView).text = app.label
+            (cell.getChildAt(1) as TextView).apply {
+                text = app.label
+                visibility = if (isHome && !homeLabels) View.GONE else View.VISIBLE
+            }
             return cell
         }
     }
@@ -224,15 +338,79 @@ class MainActivity : Activity() {
         setOnItemLongClickListener { _, _, p, _ -> appMenu(adapter.getItem(p), null); true }
     }
 
+    // Reloj estilo Holo (fuente fina), se activa en Ajustes del launcher
+    private fun makeClock() = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER_HORIZONTAL
+        setPadding(0, dp(28), 0, dp(12))
+        setOnClickListener { safeStart(Intent(AlarmClock.ACTION_SHOW_ALARMS)) }
+        addView(TextClock(context).apply {
+            format12Hour = "h:mm"
+            format24Hour = "H:mm"
+            textSize = 72f
+            typeface = Typeface.create("sans-serif-thin", Typeface.NORMAL)
+            setTextColor(Color.WHITE)
+            setShadowLayer(6f, 0f, 2f, Color.argb(120, 0, 0, 0))
+        })
+        addView(TextClock(context).apply {
+            format12Hour = "EEEE, d 'de' MMMM"
+            format24Hour = "EEEE, d 'de' MMMM"
+            textSize = 13f
+            isAllCaps = true
+            letterSpacing = 0.12f
+            setTextColor(Color.argb(230, 255, 255, 255))
+            setShadowLayer(4f, 0f, 1f, Color.argb(120, 0, 0, 0))
+        })
+    }
+
+    private fun buzz(v: View) {
+        if (haptics) v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+    }
+
+    private fun safeStart(i: Intent) {
+        try { startActivity(i) } catch (e: Exception) {
+            Toast.makeText(this, "No disponible en este teléfono", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun isOnEmptyHome(x: Float, y: Float): Boolean {
+        val loc = IntArray(2)
+        dockBar.getLocationOnScreen(loc)
+        if (y >= loc[1]) return false
+        homeGrid.getLocationOnScreen(loc)
+        return homeGrid.pointToPosition((x - loc[0]).toInt(), (y - loc[1]).toInt()) ==
+            AdapterView.INVALID_POSITION
+    }
+
+    private fun expandNotifications() {
+        try {
+            val sb = getSystemService("statusbar")
+            Class.forName("android.app.StatusBarManager")
+                .getMethod("expandNotificationsPanel").invoke(sb)
+        } catch (_: Exception) { }
+    }
+
     private fun openDrawer() {
         drawer.alpha = 0f; drawer.scaleX = 0.9f; drawer.scaleY = 0.9f
         drawer.visibility = View.VISIBLE
         drawer.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(200).start()
+        if (autoKeyboard) {
+            search.requestFocus()
+            search.postDelayed({ imm.showSoftInput(search, InputMethodManager.SHOW_IMPLICIT) }, 150)
+        }
+    }
+
+    private fun resetDrawer() {
+        imm.hideSoftInputFromWindow(search.windowToken, 0)
+        search.clearFocus()
+        if (search.text.isNotEmpty()) search.setText("")
+        drawerGrid.setSelection(0)
     }
 
     private fun closeDrawer() {
+        imm.hideSoftInputFromWindow(search.windowToken, 0)
         drawer.animate().alpha(0f).scaleX(0.9f).scaleY(0.9f).setDuration(150)
-            .withEndAction { drawer.visibility = View.GONE }.start()
+            .withEndAction { drawer.visibility = View.GONE; resetDrawer() }.start()
     }
 
     @Deprecated("Deprecated in Java")
@@ -250,13 +428,68 @@ class MainActivity : Activity() {
             startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
                 .setClassName(app.pkg, app.cls)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED))
-            drawer.visibility = View.GONE
+            if (drawer.visibility == View.VISIBLE) {
+                drawer.visibility = View.GONE
+                resetDrawer()
+            }
         } catch (e: Exception) {
             Toast.makeText(this, "No se pudo abrir", Toast.LENGTH_SHORT).show()
         }
     }
 
-    // ---------- Menú de edición ----------
+    // ---------- Menú del escritorio (mantener presionado en vacío) ----------
+    private fun launcherMenu() {
+        val items = arrayOf("Fondo de pantalla", "Ajustes del launcher", "Ocultar apps",
+            "Launcher predeterminado", "Ajustes del sistema")
+        AlertDialog.Builder(this).setItems(items) { _, w ->
+            when (w) {
+                0 -> safeStart(Intent.createChooser(Intent(Intent.ACTION_SET_WALLPAPER), "Fondo de pantalla"))
+                1 -> settingsDialog()
+                2 -> hiddenDialog()
+                3 -> safeStart(Intent(Settings.ACTION_HOME_SETTINGS))
+                4 -> safeStart(Intent(Settings.ACTION_SETTINGS))
+            }
+        }.show()
+    }
+
+    private fun settingsDialog() {
+        val keys = arrayOf("clock", "home_labels", "auto_kb", "haptics")
+        val labels = arrayOf("Mostrar reloj", "Nombres en el escritorio",
+            "Abrir teclado en el cajón", "Vibrar al mantener presionado")
+        val checked = booleanArrayOf(showClock, homeLabels, autoKeyboard, haptics)
+        AlertDialog.Builder(this).setTitle("Ajustes del launcher")
+            .setMultiChoiceItems(labels, checked) { _, i, v ->
+                prefs.edit().putBoolean(keys[i], v).apply(); applySettings()
+            }
+            .setNeutralButton("Columnas: $columns") { _, _ -> columnsDialog() }
+            .setPositiveButton("Listo", null)
+            .show()
+    }
+
+    private fun columnsDialog() {
+        val opts = arrayOf("4 columnas", "5 columnas")
+        AlertDialog.Builder(this).setTitle("Columnas")
+            .setSingleChoiceItems(opts, columns - 4) { d, i ->
+                prefs.edit().putInt("cols", i + 4).apply(); applySettings(); d.dismiss()
+            }
+            .show()
+    }
+
+    private fun hiddenDialog() {
+        val list = apps.toList()
+        val names = list.map { it.label }.toTypedArray()
+        val checked = BooleanArray(list.size) { list[it].key in hidden }
+        AlertDialog.Builder(this).setTitle("Ocultar apps del cajón")
+            .setMultiChoiceItems(names, checked) { _, i, v -> checked[i] = v }
+            .setPositiveButton("Guardar") { _, _ ->
+                list.forEachIndexed { i, a -> if (checked[i]) hidden.add(a.key) else hidden.remove(a.key) }
+                save(); refresh()
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    // ---------- Menú de una app ----------
     private fun appMenu(app: App, dockSlot: Int?) {
         val titles = mutableListOf<String>()
         val actions = mutableListOf<() -> Unit>()
@@ -266,15 +499,25 @@ class MainActivity : Activity() {
         add("Cambiar icono") { pickIcon(app) }
         if (prefs.contains("name_${app.key}") || iconFile(app.key).exists())
             add("Restaurar original") { restore(app) }
-        if (app.key in home) add("Quitar del escritorio") { home.remove(app.key); save(); refresh() }
-        else add("Añadir al escritorio") { home.add(app.key); save(); refresh() }
+
+        val idx = home.indexOf(app.key)
+        if (idx >= 0) {
+            if (idx > 0) add("Mover a la izquierda") { home.add(idx - 1, home.removeAt(idx)); save(); refresh() }
+            if (idx < home.size - 1) add("Mover a la derecha") { home.add(idx + 1, home.removeAt(idx)); save(); refresh() }
+            add("Quitar del escritorio") { home.remove(app.key); save(); refresh() }
+        } else add("Añadir al escritorio") { home.add(app.key); save(); refresh() }
+
         if (dockSlot != null) add("Quitar del dock") { dock[dockSlot] = null; save(); refresh() }
         else add("Poner en el dock") { chooseDockSlot(app) }
+
+        if (app.key in hidden) add("Mostrar en el cajón") { hidden.remove(app.key); save(); refresh() }
+        else add("Ocultar del cajón") { hidden.add(app.key); save(); refresh() }
+
         add("Info de la app") {
-            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${app.pkg}")))
+            safeStart(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${app.pkg}")))
         }
         add("Desinstalar") {
-            startActivity(Intent(Intent.ACTION_DELETE, Uri.parse("package:${app.pkg}")))
+            safeStart(Intent(Intent.ACTION_DELETE, Uri.parse("package:${app.pkg}")))
         }
 
         AlertDialog.Builder(this).setTitle(app.label)
