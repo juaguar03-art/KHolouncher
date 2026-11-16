@@ -9,6 +9,8 @@ import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.AlarmClock
 import android.provider.Settings
 import android.text.Editable
@@ -31,7 +33,8 @@ const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
 
 class App(
     val key: String, val pkg: String, val cls: String,
-    val originalLabel: String, val originalIcon: Drawable
+    val originalLabel: String, val originalIcon: Drawable,
+    val self: Boolean = false   // la entrada del propio launcher en el cajón
 ) {
     var label = originalLabel
     var icon: Drawable = originalIcon
@@ -51,6 +54,10 @@ class MainActivity : Activity() {
     private lateinit var drawerGrid: GridView
     private lateinit var homeGrid: GridView
     private lateinit var dockBar: LinearLayout
+    private lateinit var homeLayout: LinearLayout
+    private val handler = Handler(Looper.getMainLooper())
+    private val reloadTask = Runnable { loadApps() }
+    private var loadGen = 0
     private lateinit var clockBox: LinearLayout
     private lateinit var search: EditText
     private lateinit var drawerAdapter: AppAdapter
@@ -66,7 +73,11 @@ class MainActivity : Activity() {
     private val haptics get() = prefs.getBoolean("haptics", true)
 
     private val pkgReceiver = object : BroadcastReceiver() {
-        override fun onReceive(c: Context, i: Intent) = loadApps()
+        // Algunos teléfonos mandan muchos avisos seguidos: se agrupan en una sola recarga
+        override fun onReceive(c: Context, i: Intent) {
+            handler.removeCallbacks(reloadTask)
+            handler.postDelayed(reloadTask, 400)
+        }
     }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
@@ -83,7 +94,7 @@ class MainActivity : Activity() {
         val root = FrameLayout(this).apply { isFocusableInTouchMode = true }
 
         // ---------- Escritorio ----------
-        val homeLayout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        homeLayout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
         clockBox = makeClock()
         homeLayout.addView(clockBox, LinearLayout.LayoutParams(MATCH, WRAP))
@@ -177,6 +188,7 @@ class MainActivity : Activity() {
         drawerGrid = makeGrid(drawerAdapter).apply {
             isFastScrollEnabled = true
             setPadding(dp(4), dp(8), dp(4), dp(8))
+            clipToPadding = false
         }
         drawer.addView(drawerGrid, LinearLayout.LayoutParams(MATCH, 0, 1f))
         root.addView(drawer, FrameLayout.LayoutParams(MATCH, MATCH))
@@ -226,6 +238,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        handler.removeCallbacks(reloadTask)
         unregisterReceiver(pkgReceiver)
         super.onDestroy()
     }
@@ -238,23 +251,55 @@ class MainActivity : Activity() {
     // ---------- Datos ----------
     private fun iconFile(key: String) = File(filesDir, "icons/" + key.replace('/', '_') + ".png")
 
-    private fun loadApps() {
-        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        apps.clear(); byKey.clear()
-        for (ri in packageManager.queryIntentActivities(intent, 0)) {
-            val ai = ri.activityInfo
-            if (ai.packageName == packageName) continue
-            val key = "${ai.packageName}/${ai.name}"
-            val app = App(key, ai.packageName, ai.name,
-                ri.loadLabel(packageManager).toString(), ri.loadIcon(packageManager))
-            prefs.getString("name_$key", null)?.let { app.label = it }
-            val file = iconFile(key)
-            if (file.exists()) BitmapFactory.decodeFile(file.path)?.let {
-                app.icon = BitmapDrawable(resources, it)
-            }
-            apps.add(app); byKey[key] = app
+    // Dibuja el icono una sola vez en un bitmap del tamaño final: hace el scroll mucho más fluido
+    private fun raster(d: Drawable): Drawable {
+        val s = dp(52)
+        val bmp = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888)
+        d.setBounds(0, 0, s, s)
+        d.draw(Canvas(bmp))
+        return BitmapDrawable(resources, bmp)
+    }
+
+    private fun buildApp(key: String, pkg: String, cls: String, label: String, icon: Drawable, self: Boolean = false): App {
+        val app = App(key, pkg, cls, label, raster(icon), self)
+        prefs.getString("name_$key", null)?.let { app.label = it }
+        val file = iconFile(key)
+        if (file.exists()) BitmapFactory.decodeFile(file.path)?.let {
+            app.icon = BitmapDrawable(resources, it)
         }
-        apps.sortBy { it.label.lowercase() }
+        return app
+    }
+
+    // Carga en segundo plano para no trabar la interfaz
+    private fun loadApps() {
+        val gen = ++loadGen
+        Thread {
+            val list = mutableListOf<App>()
+            try {
+                val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                for (ri in packageManager.queryIntentActivities(intent, 0)) {
+                    val ai = ri.activityInfo
+                    if (ai.packageName == packageName) continue
+                    list.add(buildApp("${ai.packageName}/${ai.name}", ai.packageName, ai.name,
+                        ri.loadLabel(packageManager).toString(), ri.loadIcon(packageManager)))
+                }
+                // El propio launcher, para poder abrir sus ajustes o desinstalarlo desde el cajón
+                list.add(buildApp("$packageName/self", packageName, "",
+                    applicationInfo.loadLabel(packageManager).toString(),
+                    packageManager.getApplicationIcon(packageName), self = true))
+            } catch (_: Exception) { }
+            list.sortBy { it.label.lowercase() }
+            runOnUiThread {
+                if (gen != loadGen || isDestroyed) return@runOnUiThread
+                apps.clear(); byKey.clear()
+                apps.addAll(list)
+                list.forEach { byKey[it.key] = it }
+                loadState()
+            }
+        }.start()
+    }
+
+    private fun loadState() {
         home.clear()
         prefs.getString("home", "")!!.split(";").filter { it.isNotEmpty() }.forEach { home.add(it) }
         hidden.clear()
@@ -334,6 +379,8 @@ class MainActivity : Activity() {
     private fun makeGrid(adapter: AppAdapter) = GridView(this).apply {
         numColumns = 4
         this.adapter = adapter
+        overScrollMode = View.OVER_SCROLL_NEVER   // sin el efecto "estirar" de Android 12+
+        isVerticalFadingEdgeEnabled = false
         setOnItemClickListener { _, _, p, _ -> launch(adapter.getItem(p)) }
         setOnItemLongClickListener { _, _, p, _ -> appMenu(adapter.getItem(p), null); true }
     }
@@ -393,7 +440,8 @@ class MainActivity : Activity() {
     private fun openDrawer() {
         drawer.alpha = 0f; drawer.scaleX = 0.9f; drawer.scaleY = 0.9f
         drawer.visibility = View.VISIBLE
-        drawer.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(200).start()
+        drawer.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(200)
+            .withEndAction { homeLayout.visibility = View.INVISIBLE }.start()  // no dibujar el escritorio detrás
         if (autoKeyboard) {
             search.requestFocus()
             search.postDelayed({ imm.showSoftInput(search, InputMethodManager.SHOW_IMPLICIT) }, 150)
@@ -407,7 +455,15 @@ class MainActivity : Activity() {
         drawerGrid.setSelection(0)
     }
 
+    private fun hideDrawerNow() {
+        drawer.animate().cancel()
+        drawer.visibility = View.GONE
+        homeLayout.visibility = View.VISIBLE
+        resetDrawer()
+    }
+
     private fun closeDrawer() {
+        homeLayout.visibility = View.VISIBLE
         imm.hideSoftInputFromWindow(search.windowToken, 0)
         drawer.animate().alpha(0f).scaleX(0.9f).scaleY(0.9f).setDuration(150)
             .withEndAction { drawer.visibility = View.GONE; resetDrawer() }.start()
@@ -424,14 +480,12 @@ class MainActivity : Activity() {
     }
 
     private fun launch(app: App) {
+        if (app.self) { launcherMenu(); return }
         try {
             startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
                 .setClassName(app.pkg, app.cls)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED))
-            if (drawer.visibility == View.VISIBLE) {
-                drawer.visibility = View.GONE
-                resetDrawer()
-            }
+            if (drawer.visibility == View.VISIBLE) hideDrawerNow()
         } catch (e: Exception) {
             Toast.makeText(this, "No se pudo abrir", Toast.LENGTH_SHORT).show()
         }

@@ -13,6 +13,7 @@
 
     <application
         android:label="Mi Launcher"
+        android:icon="@drawable/ic_launcher"
         android:theme="@android:style/Theme.Holo.Wallpaper.NoTitleBar">
         <activity
             android:name=".MainActivity"
