@@ -230,7 +230,12 @@ class MainActivity : Activity() {
 
         applySettings()
         loadApps()
+        if (b == null && fromOtherLauncher(intent)) handler.post { launcherMenu() }
     }
+
+    // Abierto desde el icono en otro launcher (activity-alias .LauncherEntry)
+    private fun fromOtherLauncher(i: Intent?) =
+        i?.component?.className?.endsWith(".LauncherEntry") == true
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         if (::gestures.isInitialized) gestures.onTouchEvent(ev)
@@ -477,6 +482,7 @@ class MainActivity : Activity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (drawer.visibility == View.VISIBLE) closeDrawer()
+        if (fromOtherLauncher(intent)) handler.post { launcherMenu() }
     }
 
     private fun launch(app: App) {

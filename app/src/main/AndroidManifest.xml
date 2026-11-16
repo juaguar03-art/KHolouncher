@@ -29,5 +29,18 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <!-- Entrada en el cajón de otros launchers (p. ej. el de Poco): abre los ajustes -->
+        <activity-alias
+            android:name=".LauncherEntry"
+            android:targetActivity=".MainActivity"
+            android:label="Mi Launcher"
+            android:icon="@drawable/ic_launcher"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
     </application>
 </manifest>
