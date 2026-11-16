@@ -134,6 +134,7 @@ class MainActivity : Activity() {
     private var lastRawX = 0f
     private var lastRawY = 0f
     private var edgeDir = 0
+    private var fingerDown = false
     private val edgeTask = Runnable {
         if (drag != null && edgeDir != 0) {
             pager.snapTo(pager.current + edgeDir)
@@ -325,6 +326,14 @@ class MainActivity : Activity() {
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         lastRawX = ev.rawX
         lastRawY = ev.rawY
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                // Un toque nuevo nunca debe heredar un arrastre que quedó colgado
+                if (drag != null && !dragStarted) resetDrag()
+                fingerDown = true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> fingerDown = false
+        }
         if (drag != null) { handleDrag(ev); return true }
         if (::gestures.isInitialized && folderView == null) gestures.onTouchEvent(ev)
         return super.dispatchTouchEvent(ev)
@@ -1016,7 +1025,7 @@ class MainActivity : Activity() {
     }
 
     private fun beginDrag(src: DragSource, v: View, vibrate: Boolean = false) {
-        if (drag != null) return
+        if (drag != null || !fingerDown) return   // solo si el dedo sigue en la pantalla
         drag = src
         dragStarted = false
         startRawX = lastRawX
@@ -1429,6 +1438,107 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this).setItems(titles.toTypedArray()) { _, w -> actions[w]() }.show()
     }
 
+    // ================= Cambiar el ícono de una app =================
+    private fun changeIconMenu(app: App) {
+        AlertDialog.Builder(this).setTitle("Cambiar icono")
+            .setItems(arrayOf("Desde un paquete de íconos", "Desde la galería")) { _, w ->
+                if (w == 0) choosePackFor(app) else pickIcon(app)
+            }.show()
+    }
+
+    private fun choosePackFor(app: App) {
+        val packs = try { IconPack.installed(this) } catch (_: Exception) { emptyList() }
+        when {
+            packs.isEmpty() -> toast("No tenés paquetes de íconos instalados")
+            packs.size == 1 -> packIconPicker(app, packs[0].first)
+            else -> {
+                // el paquete en uso va primero
+                val cur = prefs.getString("icon_pack", null)
+                val sorted = packs.sortedBy { if (it.first == cur) 0 else 1 }
+                AlertDialog.Builder(this).setTitle("Elegí el paquete")
+                    .setItems(sorted.map { it.second }.toTypedArray()) { _, w -> packIconPicker(app, sorted[w].first) }
+                    .show()
+            }
+        }
+    }
+
+    private fun packIconPicker(app: App, packPkg: String) {
+        val pack = try { IconPack(this, packPkg) } catch (_: Exception) { null }
+        if (pack == null) { toast("No se pudo abrir el paquete"); return }
+        val all = pack.allIcons().toMutableList()
+        pack.suggested(app.pkg, app.cls)?.let { s -> all.remove(s); all.add(0, s) }
+        if (all.isEmpty()) { toast("Ese paquete no tiene íconos para elegir"); return }
+        val shown = all.toMutableList()
+        val cache = HashMap<String, Drawable?>()
+
+        val grid = GridView(this).apply {
+            numColumns = 4
+            overScrollMode = View.OVER_SCROLL_NEVER
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+        }
+        val adapter = object : BaseAdapter() {
+            override fun getCount() = shown.size
+            override fun getItem(p: Int) = shown[p]
+            override fun getItemId(p: Int) = p.toLong()
+            override fun getView(p: Int, convert: View?, parent: ViewGroup): View {
+                val iv = (convert as? ImageView) ?: ImageView(this@MainActivity).apply {
+                    layoutParams = AbsListView.LayoutParams(MATCH, dp(68))
+                    setPadding(dp(8), dp(8), dp(8), dp(8))
+                    scaleType = ImageView.ScaleType.FIT_CENTER
+                }
+                val name = shown[p]
+                iv.setImageDrawable(cache.getOrPut(name) { pack.drawable(name) })
+                return iv
+            }
+        }
+        grid.adapter = adapter
+        val filter = EditText(this).apply {
+            hint = "Buscar ícono"
+            setSingleLine()
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            setCompoundDrawablesWithIntrinsicBounds(android.R.drawable.ic_menu_search, 0, 0, 0)
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun afterTextChanged(s: Editable?) {
+                    val q = norm(s.toString().trim()).replace(" ", "_")
+                    shown.clear()
+                    all.filterTo(shown) { q.isEmpty() || it.contains(q) }
+                    adapter.notifyDataSetChanged()
+                }
+            })
+        }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(8), dp(12), 0)
+            addView(filter, LinearLayout.LayoutParams(MATCH, WRAP))
+            addView(grid, LinearLayout.LayoutParams(MATCH, dp(380)))
+        }
+        val dialog = AlertDialog.Builder(this).setTitle("Ícono para ${app.label}")
+            .setView(box)
+            .setNegativeButton("Cancelar", null)
+            .create()
+        grid.setOnItemClickListener { _, _, p, _ ->
+            val d = cache[shown[p]] ?: pack.drawable(shown[p])
+            if (d != null) setCustomIcon(app, d)
+            dialog.dismiss()
+        }
+        dialog.show()
+    }
+
+    // Guarda el ícono elegido igual que uno de la galería (sobrevive a cambios de paquete)
+    private fun setCustomIcon(app: App, d: Drawable) {
+        val size = dp(96)
+        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        d.setBounds(0, 0, size, size)
+        d.draw(Canvas(bmp))
+        val file = iconFile(app.key)
+        file.parentFile?.mkdirs()
+        file.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        app.icon = BitmapDrawable(resources, bmp)
+        refresh()
+    }
+
     // ================= Paquetes de íconos =================
     private fun iconPackDialog() {
         val packs = try { IconPack.installed(this) } catch (_: Exception) { emptyList() }
@@ -1584,7 +1694,7 @@ class MainActivity : Activity() {
         fun add(t: String, f: () -> Unit) { titles.add(t); actions.add(f) }
 
         add("Renombrar") { rename(app) }
-        add("Cambiar icono") { pickIcon(app) }
+        add("Cambiar icono") { changeIconMenu(app) }
         if (prefs.contains("name_${app.key}") || iconFile(app.key).exists())
             add("Restaurar original") { restore(app) }
 

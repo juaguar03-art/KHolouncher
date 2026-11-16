@@ -250,19 +250,24 @@ class LauncherWidgetView(c: Context) : AppWidgetHostView(c) {
     private var longPressed = false
     private val check = Runnable { longPressed = true; onLongPress?.invoke(this) }
 
-    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+    // Se vigila en dispatchTouchEvent (recibe TODOS los toques), no solo en onInterceptTouchEvent:
+    // así, al levantar el dedo, el "mantener presionado" pendiente siempre se cancela.
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 longPressed = false
                 downX = ev.x; downY = ev.y
+                removeCallbacks(check)
                 postDelayed(check, ViewConfiguration.getLongPressTimeout().toLong())
             }
             MotionEvent.ACTION_MOVE ->
                 if (abs(ev.x - downX) > slop || abs(ev.y - downY) > slop) removeCallbacks(check)
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> removeCallbacks(check)
         }
-        return longPressed
+        return super.dispatchTouchEvent(ev)
     }
+
+    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean = longPressed
 
     override fun onTouchEvent(ev: MotionEvent): Boolean {
         if (longPressed) return true

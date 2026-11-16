@@ -65,7 +65,7 @@ class IconPack(ctx: Context, private val pkg: String) {
         return pk to cl
     }
 
-    private fun drawable(name: String): Drawable? {
+    fun drawable(name: String): Drawable? {
         var id = res.getIdentifier(name, "drawable", pkg)
         if (id == 0) id = res.getIdentifier(name, "mipmap", pkg)
         if (id == 0) return null
@@ -101,6 +101,32 @@ class IconPack(ctx: Context, private val pkg: String) {
         upon?.let { drawable(it) }?.let { it.setBounds(0, 0, size, size); it.draw(c) }
         return android.graphics.drawable.BitmapDrawable(res, out)
     }
+
+    // Todos los íconos del paquete (drawable.xml si existe; si no, los de appfilter)
+    fun allIcons(): List<String> {
+        val names = LinkedHashSet<String>()
+        try {
+            val id = res.getIdentifier("drawable", "xml", pkg)
+            val p: XmlPullParser? = if (id != 0) res.getXml(id) else try {
+                XmlPullParserFactory.newInstance().newPullParser().apply {
+                    setInput(res.assets.open("drawable.xml"), "UTF-8")
+                }
+            } catch (_: Exception) { null }
+            if (p != null) {
+                var ev = p.eventType
+                while (ev != XmlPullParser.END_DOCUMENT) {
+                    if (ev == XmlPullParser.START_TAG && p.name == "item")
+                        p.getAttributeValue(null, "drawable")?.let { names.add(it) }
+                    ev = p.next()
+                }
+            }
+        } catch (_: Exception) { }
+        if (names.isEmpty()) names.addAll(byComponent.values.sorted())
+        return names.toList()
+    }
+
+    // El ícono que el paquete asigna a esa app (para ponerlo primero en la lista)
+    fun suggested(appPkg: String, cls: String): String? = byComponent["$appPkg/$cls"] ?: byPackage[appPkg]
 
     companion object {
         val ACTIONS = listOf(

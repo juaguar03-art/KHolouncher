@@ -10,8 +10,8 @@ android {
         applicationId = "com.mio.launcher"
         minSdk = 26
         targetSdk = 34
-        versionCode = 9
-        versionName = "2.1"
+        versionCode = 10
+        versionName = "2.1.1"
     }
     // Firma siempre con la misma llave (secretos de GitHub) para poder actualizar sin desinstalar
     val ks = System.getenv("KEYSTORE_PATH")
