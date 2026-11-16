@@ -14,7 +14,7 @@
     </queries>
 
     <application
-        android:label="Mi Launcher"
+        android:label="KHolouncher"
         android:icon="@drawable/ic_launcher"
         android:theme="@android:style/Theme.Holo.Wallpaper.NoTitleBar">
         <activity
@@ -36,7 +36,7 @@
         <activity-alias
             android:name=".LauncherEntry"
             android:targetActivity=".MainActivity"
-            android:label="Mi Launcher"
+            android:label="KHolouncher"
             android:icon="@drawable/ic_launcher"
             android:exported="true">
             <intent-filter>

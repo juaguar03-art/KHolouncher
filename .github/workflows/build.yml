@@ -36,12 +36,12 @@ jobs:
         run: |
           VER=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
           echo "VER=$VER" >> "$GITHUB_ENV"
-          cp app/build/outputs/apk/release/app-release.apk "MiLauncher-$VER.apk"
+          cp app/build/outputs/apk/release/app-release.apk "KHolouncher-$VER.apk"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: MiLauncher
-          path: MiLauncher-*.apk
+          name: KHolouncher
+          path: KHolouncher-*.apk
 
       # Publica el APK directo (sin zip) en Releases con cada cambio
       - name: Publicar en Releases
@@ -49,7 +49,7 @@ jobs:
         with:
           tag_name: v${{ env.VER }}-${{ github.run_number }}
           target_commitish: ${{ github.sha }}
-          name: Mi Launcher ${{ env.VER }} (build ${{ github.run_number }})
-          files: MiLauncher-*.apk
+          name: KHolouncher ${{ env.VER }} (build ${{ github.run_number }})
+          files: KHolouncher-*.apk
           prerelease: ${{ github.ref != 'refs/heads/main' }}
           make_latest: ${{ github.ref == 'refs/heads/main' }}

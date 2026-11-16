@@ -1629,7 +1629,7 @@ class MainActivity : Activity() {
                     startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT)
                         .addCategory(Intent.CATEGORY_OPENABLE)
                         .setType("application/json")
-                        .putExtra(Intent.EXTRA_TITLE, "milauncher-respaldo.json"), REQ_EXPORT)
+                        .putExtra(Intent.EXTRA_TITLE, "kholouncher-respaldo.json"), REQ_EXPORT)
                 } catch (_: Exception) { toast("No disponible en este teléfono") }
             }
             .setNeutralButton("Importar") { _, _ ->
@@ -1647,7 +1647,7 @@ class MainActivity : Activity() {
         try {
             save()
             val o = JSONObject()
-            o.put("app", "MiLauncher")
+            o.put("app", "KHolouncher")
             o.put("version", 1)
             val pj = JSONObject()
             for ((k, v) in prefs.all) {
@@ -1679,9 +1679,9 @@ class MainActivity : Activity() {
     private fun importFrom(uri: Uri) {
         val o = try {
             val txt = contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) } ?: ""
-            JSONObject(txt).takeIf { it.optString("app") == "MiLauncher" }
+            JSONObject(txt).takeIf { it.optString("app") in setOf("KHolouncher", "MiLauncher") }
         } catch (_: Exception) { null }
-        if (o == null) { toast("Ese archivo no es un respaldo de Mi Launcher"); return }
+        if (o == null) { toast("Ese archivo no es un respaldo de KHolouncher"); return }
         AlertDialog.Builder(this).setTitle("Importar configuración")
             .setMessage("Esto reemplaza tu configuración actual. ¿Seguir?")
             .setPositiveButton("Importar") { _, _ -> applyBackup(o) }
