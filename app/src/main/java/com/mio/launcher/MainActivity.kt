@@ -153,6 +153,15 @@ class MainActivity : Activity() {
     private val homeLabels get() = prefs.getBoolean("home_labels", true)
     private val autoKeyboard get() = prefs.getBoolean("auto_kb", false)
     private val haptics get() = prefs.getBoolean("haptics", true)
+    private val homeLocked get() = prefs.getBoolean("lock_home", false)
+
+    // Gestos configurables: deslizar arriba, deslizar abajo, doble toque
+    private val gestureNames = arrayOf("Deslizar hacia arriba", "Deslizar hacia abajo", "Doble toque")
+    private val gestureKeys = arrayOf("g_up", "g_down", "g_double")
+    private val gestureDefaults = arrayOf("drawer", "notif", "none")
+    private val actionIds = arrayOf("none", "drawer", "notif", "quick", "assistant", "search", "app")
+    private val actionNames = arrayOf("Nada", "Abrir el cajón de apps", "Notificaciones", "Ajustes rápidos",
+        "Gemini / Asistente", "Buscar en Google", "Abrir una app…")
 
     private val pkgReceiver = object : BroadcastReceiver() {
         // Algunos teléfonos mandan muchos avisos seguidos: se agrupan en una sola recarga
@@ -255,8 +264,14 @@ class MainActivity : Activity() {
                     if (dy > 0 && drawerContentAtTop()) { closeDrawer(); return true }
                     return false
                 }
-                if (dy < 0) openDrawer() else expandNotifications()
+                runGesture(if (dy < 0) 0 else 1)
                 return true
+            }
+
+            override fun onDoubleTap(e: MotionEvent): Boolean {
+                if (drawer.visibility == View.VISIBLE || drag != null) return false
+                if (!isOnEmptyHome(e.rawX, e.rawY)) return false
+                return runGesture(2)
             }
 
             override fun onLongPress(e: MotionEvent) {
@@ -349,8 +364,10 @@ class MainActivity : Activity() {
     private fun Drawable.copy(): Drawable =
         (this as? BitmapDrawable)?.bitmap?.let { BitmapDrawable(resources, it) } ?: this
 
-    private fun buildApp(key: String, pkg: String, cls: String, label: String, icon: Drawable, self: Boolean = false): App {
-        val app = App(key, pkg, cls, label, raster(icon), self)
+    private fun buildApp(key: String, pkg: String, cls: String, label: String, icon: Drawable,
+                         self: Boolean = false, pack: IconPack? = null): App {
+        val themed = if (pack != null && !self) try { pack.iconFor(pkg, cls, icon, dp(52)) } catch (_: Exception) { null } else null
+        val app = App(key, pkg, cls, label, raster(themed ?: icon), self)
         prefs.getString("name_$key", null)?.let { app.label = it }
         val file = iconFile(key)
         if (file.exists()) BitmapFactory.decodeFile(file.path)?.let {
@@ -364,13 +381,16 @@ class MainActivity : Activity() {
         val gen = ++loadGen
         Thread {
             val list = mutableListOf<App>()
+            val pack = prefs.getString("icon_pack", null)?.let {
+                try { IconPack(this, it) } catch (_: Exception) { null }
+            }
             try {
                 val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
                 for (ri in packageManager.queryIntentActivities(intent, 0)) {
                     val ai = ri.activityInfo
                     if (ai.packageName == packageName) continue
                     list.add(buildApp("${ai.packageName}/${ai.name}", ai.packageName, ai.name,
-                        ri.loadLabel(packageManager).toString(), ri.loadIcon(packageManager)))
+                        ri.loadLabel(packageManager).toString(), ri.loadIcon(packageManager), pack = pack))
                 }
                 // El propio launcher, para poder abrir sus ajustes o desinstalarlo desde el cajón
                 list.add(buildApp("$packageName/self", packageName, "",
@@ -839,11 +859,12 @@ class MainActivity : Activity() {
         return cl.childAt(x - l[0], y - l[1]) == null
     }
 
-    private fun expandNotifications() {
+    private fun expandNotifications() = statusBar("expandNotificationsPanel")
+
+    private fun statusBar(method: String) {
         try {
             val sb = getSystemService("statusbar")
-            Class.forName("android.app.StatusBarManager")
-                .getMethod("expandNotificationsPanel").invoke(sb)
+            Class.forName("android.app.StatusBarManager").getMethod(method).invoke(sb)
         } catch (_: Exception) { }
     }
 
@@ -1022,6 +1043,11 @@ class MainActivity : Activity() {
             MotionEvent.ACTION_MOVE -> {
                 if (!dragStarted) {
                     if (hypot(ev.rawX - startRawX, ev.rawY - startRawY) < dp(12)) return
+                    if (homeLocked) {   // escritorio bloqueado: no se mueve nada
+                        resetDrag()
+                        toast("El escritorio está bloqueado")
+                        return
+                    }
                     startDragVisual()
                 }
                 moveDragView()
@@ -1386,19 +1412,119 @@ class MainActivity : Activity() {
 
     // ================= Menús =================
     private fun launcherMenu() {
-        val opts = arrayOf("Fondo de pantalla", "Widgets", "Ajustes del launcher", "Ocultar apps",
-            "Copia de seguridad", "Launcher predeterminado", "Ajustes del sistema")
-        AlertDialog.Builder(this).setItems(opts) { _, w ->
-            when (w) {
-                0 -> wallpaperMenu()
-                1 -> { openDrawer(); selectTab(true) }
-                2 -> settingsDialog()
-                3 -> hiddenDialog()
-                4 -> backupMenu()
-                5 -> safeStart(Intent(Settings.ACTION_HOME_SETTINGS))
-                6 -> safeStart(Intent(Settings.ACTION_SETTINGS))
+        val titles = mutableListOf<String>()
+        val actions = mutableListOf<() -> Unit>()
+        fun add(t: String, f: () -> Unit) { titles.add(t); actions.add(f) }
+        add("Fondo de pantalla") { wallpaperMenu() }
+        add("Widgets") { openDrawer(); selectTab(true) }
+        add("Paquete de íconos") { iconPackDialog() }
+        add("Gestos") { gesturesDialog() }
+        if (homeLocked) add("Desbloquear escritorio") { prefs.edit().putBoolean("lock_home", false).apply(); toast("Escritorio desbloqueado") }
+        else add("Bloquear escritorio") { prefs.edit().putBoolean("lock_home", true).apply(); toast("Escritorio bloqueado") }
+        add("Ajustes del launcher") { settingsDialog() }
+        add("Ocultar apps") { hiddenDialog() }
+        add("Copia de seguridad") { backupMenu() }
+        add("Launcher predeterminado") { safeStart(Intent(Settings.ACTION_HOME_SETTINGS)) }
+        add("Ajustes del sistema") { safeStart(Intent(Settings.ACTION_SETTINGS)) }
+        AlertDialog.Builder(this).setItems(titles.toTypedArray()) { _, w -> actions[w]() }.show()
+    }
+
+    // ================= Paquetes de íconos =================
+    private fun iconPackDialog() {
+        val packs = try { IconPack.installed(this) } catch (_: Exception) { emptyList() }
+        val names = arrayOf("Íconos del sistema") + packs.map { it.second }.toTypedArray()
+        val cur = prefs.getString("icon_pack", null)
+        val sel = packs.indexOfFirst { it.first == cur } + 1
+        val b = AlertDialog.Builder(this).setTitle("Paquete de íconos")
+            .setSingleChoiceItems(names, sel) { d, w ->
+                d.dismiss()
+                val e = prefs.edit()
+                if (w == 0) e.remove("icon_pack") else e.putString("icon_pack", packs[w - 1].first)
+                e.apply()
+                toast("Aplicando íconos…")
+                loadApps()
             }
-        }.show()
+        if (packs.isEmpty()) b.setMessage("No tenés paquetes de íconos instalados. Buscá \"icon pack\" en Play Store.")
+            .setPositiveButton("Abrir Play Store") { _, _ ->
+                safeStart(Intent(Intent.ACTION_VIEW, Uri.parse("market://search?q=icon%20pack&c=apps")))
+            }
+        b.show()
+    }
+
+    // ================= Gestos =================
+    private fun gestureAction(i: Int) = prefs.getString(gestureKeys[i], gestureDefaults[i]) ?: "none"
+
+    private fun gestureLabel(i: Int): String {
+        val a = gestureAction(i)
+        if (a == "app") return prefs.getString(gestureKeys[i] + "_app", null)?.let { byKey[it]?.label } ?: "App"
+        return actionNames[max(0, actionIds.indexOf(a))]
+    }
+
+    private fun gesturesDialog() {
+        val items = Array(gestureNames.size) { "${gestureNames[it]}: ${gestureLabel(it)}" }
+        AlertDialog.Builder(this).setTitle("Gestos del escritorio")
+            .setItems(items) { _, i -> chooseGestureAction(i) }
+            .setPositiveButton("Listo", null)
+            .show()
+    }
+
+    private fun chooseGestureAction(i: Int) {
+        AlertDialog.Builder(this).setTitle(gestureNames[i])
+            .setSingleChoiceItems(actionNames, max(0, actionIds.indexOf(gestureAction(i)))) { d, w ->
+                d.dismiss()
+                if (actionIds[w] == "app") pickGestureApp(i)
+                else { prefs.edit().putString(gestureKeys[i], actionIds[w]).apply(); gesturesDialog() }
+            }.show()
+    }
+
+    private fun pickGestureApp(i: Int) {
+        val list = apps.filter { !it.self }
+        AlertDialog.Builder(this).setTitle("Abrir una app")
+            .setItems(list.map { it.label }.toTypedArray()) { _, w ->
+                prefs.edit().putString(gestureKeys[i], "app").putString(gestureKeys[i] + "_app", list[w].key).apply()
+                gesturesDialog()
+            }.show()
+    }
+
+    private fun runGesture(i: Int): Boolean {
+        when (gestureAction(i)) {
+            "drawer" -> openDrawer()
+            "notif" -> expandNotifications()
+            "quick" -> statusBar("expandSettingsPanel")
+            "assistant" -> openAssistant()
+            "search" -> openSearch()
+            "app" -> {
+                val app = prefs.getString(gestureKeys[i] + "_app", null)?.let { byKey[it] } ?: return false
+                launch(app)
+            }
+            else -> return false
+        }
+        return true
+    }
+
+    private fun startFirst(vararg intents: Intent?): Boolean {
+        for (i in intents) {
+            if (i == null) continue
+            try { startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); return true } catch (_: Exception) { }
+        }
+        return false
+    }
+
+    // Abre Gemini / el asistente sin depender del botón de inicio
+    private fun openAssistant() {
+        if (!startFirst(
+                Intent(Intent.ACTION_VOICE_COMMAND),
+                Intent(Intent.ACTION_ASSIST),
+                packageManager.getLaunchIntentForPackage("com.google.android.apps.bard")
+            )) toast("No se encontró un asistente")
+    }
+
+    private fun openSearch() {
+        if (!startFirst(
+                Intent("android.search.action.GLOBAL_SEARCH"),
+                Intent(Intent.ACTION_WEB_SEARCH).putExtra(android.app.SearchManager.QUERY, ""),
+                packageManager.getLaunchIntentForPackage("com.google.android.googlequicksearchbox")
+            )) toast("No se encontró la búsqueda de Google")
     }
 
     private fun settingsDialog() {
